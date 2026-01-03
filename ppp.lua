@@ -331,13 +331,13 @@ end
 
 -- Cari baris ini dan ubah isinya menjadi:
 local Window = Fluent:CreateWindow({
-    Title = "LimitHub | Grow A Garden v5.5",
-    SubTitle = "by LimitHub",
+    Title = "LimitHub | Grow A Garden",
+    SubTitle = "v5.5",
     TabWidth = 160,
     Size = UDim2.fromOffset(580, 460),
-    Acrylic = false, 
+    Acrylic = true,
     Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.LeftControl -- Tombol untuk buka/tutup menu
+    MinimizeKey = Enum.KeyCode.LeftControl
 })
 local ConfigLod = "LimitHub/Garden/config/Garden.json"
 
@@ -400,7 +400,8 @@ local Tab11 = Window:AddTab({
     Icon = "settings"
 })
 
-
+-- Tambahkan ini di baris paling terakhir sendiri
+MainMenu()
 
 Window:SelectTab(1) 
 
