@@ -1,17 +1,19 @@
 --[[
-    NEBULA HUB | Egg Snipe ESP Only
-    - Only ESP for eggs showing pet name + base weight
-    - Cleaned from all other features
+    NEBULA HUB | Egg Snipe ESP Only (Full Migration from LimitHub)
+    - Exact ESP logic from original LimitHub script
+    - No code truncated - all functions, cache, upvalue handling preserved
+    - Only this feature - everything else removed
+    - Current status (Jan 2026): Partial work due to game patch (highlight works, name/weight often "?" or incorrect)
 ]]
 
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 
 local Window = Fluent:CreateWindow({
     Title = "NEBULA HUB | Egg Snipe ESP",
-    SubTitle = "Only ESP",
+    SubTitle = "From LimitHub (Jan 2026)",
     Icon = "egg",
     TabWidth = 140,
-    Size = UDim2.fromOffset(400, 220),
+    Size = UDim2.fromOffset(420, 260),
     Acrylic = true,
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl 
@@ -19,19 +21,16 @@ local Window = Fluent:CreateWindow({
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
-local CollectionService = game:GetService("CollectionService")
 local LocalPlayer = Players.LocalPlayer
 
 -- Replicated Modules
 local DataService = require(RS.Modules.DataService)
 
--- ==============================
--- BaseWeight Cache System
--- ==============================
+-- ===================== BaseWeight Helper (scan DataService → cache) =====================
 local EggBW = {
     _cache = nil,
     _builtAt = 0,
-    _REBUILD_SECS = 2,
+    _REBUILD_SECS = 2,    
 }
 
 local function _getProfileTable(timeout)
@@ -77,140 +76,197 @@ function EggBW.Get(uuid)
     return EggBW._cache[tostring(uuid)]
 end
 
--- ==============================
--- ESP Functions
--- ==============================
-local function FormatBW3(bw)
-    if not bw then return "?" end
-    local t = tonumber(bw)
-    if t == 0 then return "0" end
-    local decimals = math.max(0, 3 - (math.floor(math.log10(math.abs(t))) + 1))
-    return string.format("%." .. decimals .. "f", t)
+-- ===================== ESP (nama + BaseWeight) ====================
+local function TruncSig(n, sig)
+    local x = tonumber(n)
+    if not x then return nil end
+    if x == 0 then return 0 end
+    local d = math.floor(math.log10(math.abs(x))) + 1
+    local decimals = math.max(0, (sig or 3) - d)
+    local s = 10 ^ decimals
+    return (x >= 0) and (math.floor(x*s)/s) or (math.ceil(x*s)/s)
 end
 
-local function CreateEggESP(eggModel)
-    if eggModel:FindFirstChild("EggESP_HL") or eggModel:FindFirstChild("EggESP_BB") then return end
+local function FormatBW3(bw)
+    local t = TruncSig(bw, 3)
+    if t == nil then return "?" end
+    return tostring(t)
+end
 
-    local uuid = eggModel:GetAttribute("EggUUID") or eggModel:GetAttribute("UUID")
-    local petName = "Unknown Egg"
-    local baseW = "?"
+local eggModels = {}
+local eggPets = {}
+local val, gege = pcall(function()
+	local hatchFunc = getupvalue(getupvalue(getconnections(RS.GameEvents.PetEggService.OnClientEvent)[1].Function, 1), 2)
+	eggModels = getupvalue(hatchFunc, 1) or {}
+	eggPets = getupvalue(hatchFunc, 2) or {}
+end)
 
-    if uuid then
-        local bw = EggBW.Get(uuid)
-        baseW = FormatBW3(bw)
+local function createSimplePetEsp(object, petName, opts)
+    opts = opts or {}
 
-        -- Ambil nama pet dari eggModels (dari hatch function upvalue)
-        local success, eggPets = pcall(function()
-            local hatchFunc = getupvalue(getupvalue(getconnections(RS.GameEvents.PetEggService.OnClientEvent)[1].Function, 1), 2)
-            return getupvalue(hatchFunc, 2) or {}
-        end)
-        if success and eggPets[uuid] then
-            petName = eggPets[uuid]
-        end
+    local THEME = {
+        fillColor            = opts.fillColor            or Color3.fromRGB(255, 200, 100),
+        fillTransparency     = opts.fillTransparency     or 0.2,
+        outlineColor         = opts.outlineColor         or Color3.fromRGB(255, 255, 255),
+        outlineTransparency  = opts.outlineTransparency  or 0,
+
+        bgTop                = opts.bgTop                or Color3.fromRGB(36, 36, 36),
+        bgBottom             = opts.bgBottom             or Color3.fromRGB(20, 20, 20),
+        bgTransparency       = opts.bgTransparency       or 0.15,
+        strokeColor          = opts.strokeColor          or Color3.fromRGB(255, 255, 255),
+        strokeTransparency   = opts.strokeTransparency   or 0.6,
+        cornerRadiusPx       = opts.cornerRadiusPx       or 10,
+
+        textColor            = opts.textColor            or Color3.fromRGB(245, 245, 245),
+        textStrokeColor      = opts.textStrokeColor      or Color3.fromRGB(0, 0, 0),
+        textStrokeTrans      = opts.textStrokeTrans      or 0.6,
+        font                 = opts.font                 or Enum.Font.GothamBold,
+
+        width                = opts.width                or 200,
+        height               = opts.height               or 36,
+        offset               = opts.offset               or Vector3.new(0, 2.2, 0),
+        maxDistance          = opts.maxDistance          or 200,
+    }
+
+    local adorneeForBillboard = object
+    if not (object and object:IsA("BasePart")) then
+        local found = object and object:FindFirstChildWhichIsA("BasePart", true)
+        if found then adorneeForBillboard = found end
     end
 
-    -- Highlight
+    local oldHL = object:FindFirstChild("EggESP")
+    if oldHL then oldHL:Destroy() end
+    local oldBB = object:FindFirstChild("PetESP_Simple")
+    if oldBB then oldBB:Destroy() end
+
     local hl = Instance.new("Highlight")
-    hl.Name = "EggESP_HL"
-    hl.Adornee = eggModel
-    hl.FillColor = Color3.fromRGB(255, 215, 0)
-    hl.FillTransparency = 0.3
-    hl.OutlineColor = Color3.fromRGB(255, 255, 100)
-    hl.OutlineTransparency = 0
+    hl.Name = "EggESP"
+    hl.Adornee = object
+    hl.FillColor = THEME.fillColor
+    hl.FillTransparency = THEME.fillTransparency
+    hl.OutlineColor = THEME.outlineColor
+    hl.OutlineTransparency = THEME.outlineTransparency
     hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Parent = eggModel
+    hl.Parent = object
 
-    -- Billboard
     local billboard = Instance.new("BillboardGui")
-    billboard.Name = "EggESP_BB"
-    billboard.Adornee = eggModel:FindFirstChildWhichIsA("BasePart") or eggModel
-    billboard.Size = UDim2.fromOffset(180, 40)
-    billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+    billboard.Name = "PetESP_Simple"
+    billboard.Adornee = adorneeForBillboard
+    billboard.Size = UDim2.fromOffset(THEME.width, THEME.height)
+    billboard.StudsOffset = THEME.offset
     billboard.AlwaysOnTop = true
-    billboard.MaxDistance = 300
+    billboard.MaxDistance = THEME.maxDistance
 
-    local frame = Instance.new("Frame", billboard)
-    frame.Size = UDim2.fromScale(1, 1)
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    frame.BackgroundTransparency = 0.2
-    frame.BorderSizePixel = 0
+    local container = Instance.new("Frame")
+    container.Size = UDim2.fromScale(1, 1)
+    container.BackgroundColor3 = THEME.bgBottom
+    container.BackgroundTransparency = THEME.bgTransparency
+    container.BorderSizePixel = 0
+    container.Parent = billboard
 
-    local corner = Instance.new("UICorner", frame)
-    corner.CornerRadius = UDim.new(0, 8)
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, THEME.cornerRadiusPx)
+    corner.Parent = container
 
-    local stroke = Instance.new("UIStroke", frame)
-    stroke.Color = Color3.fromRGB(255, 255, 100)
-    stroke.Thickness = 1.5
-    stroke.Transparency = 0.4
+    local stroke = Instance.new("UIStroke")
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Thickness = 1
+    stroke.Color = THEME.strokeColor
+    stroke.Transparency = THEME.strokeTransparency
+    stroke.Parent = container
 
-    local label = Instance.new("TextLabel", frame)
+    local grad = Instance.new("UIGradient")
+    grad.Rotation = 90
+    grad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, THEME.bgTop),
+        ColorSequenceKeypoint.new(1, THEME.bgBottom)
+    })
+    grad.Parent = container
+
+    local label = Instance.new("TextLabel")
     label.Size = UDim2.fromScale(1, 1)
     label.BackgroundTransparency = 1
-    label.TextColor3 = Color3.fromRGB(255, 255, 200)
-    label.TextStrokeTransparency = 0.4
-    label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    label.Font = Enum.Font.GothamBold
-    label.TextSize = 16
-    label.Text = string.format("Name: %s\nWeight: %s KG", petName, baseW)
+    label.TextColor3 = THEME.textColor
+    label.TextStrokeColor3 = THEME.textStrokeColor
+    label.TextStrokeTransparency = THEME.textStrokeTrans
+    label.Font = THEME.font
+    label.TextSize = 14
+    label.Text = petName or "Loading..."
+    label.Parent = container
 
-    billboard.Parent = eggModel
+    billboard.Parent = object
+
+    -- Update text with base weight
+    task.spawn(function()
+        while object.Parent do
+            local uuid = object:GetAttribute("EggUUID") or object:GetAttribute("UUID")
+            local bw = uuid and EggBW.Get(uuid)
+            local name = uuid and eggPets[uuid] or "Unknown"
+            label.Text = ("Name: %s\nWeight: %s KG"):format(name, FormatBW3(bw))
+            task.wait(1)
+        end
+    end)
 end
 
-local function ClearAllESP()
+local function ClearESP()
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:FindFirstChild("EggESP_HL") then obj.EggESP_HL:Destroy() end
-        if obj:FindFirstChild("EggESP_BB") then obj.EggESP_BB:Destroy() end
+        local hl = obj:FindFirstChild("EggESP")
+        if hl then hl:Destroy() end
+        local bb = obj:FindFirstChild("PetESP_Simple")
+        if bb then bb:Destroy() end
     end
 end
 
--- ==============================
--- Main Tab & Toggle
--- ==============================
-local MainTab = Window:AddTab({ Title = "Egg ESP", Icon = "egg" })
-local EspSection = MainTab:AddSection("Egg Snipe ESP")
+-- ===================== UI =====================
+local Tab = Window:AddTab({ Title = "Egg ESP", Icon = "egg" })
+local Section = Tab:AddSection("Pet Egg Snipe ESP")
 
-local espRunning = false
-EspSection:AddToggle("EggESP", {
+local espEnabled = false
+Section:AddToggle("EnableESP", {
     Title = "Enable Egg ESP",
-    Description = "Show pet name + base weight on all eggs",
+    Description = "Show pet name + base weight on all eggs (partial due to 2025 patch)",
     Default = false,
-    Callback = function(value)
-        espRunning = value
-        if value then
-            ClearAllESP()
-            -- Scan existing eggs
+    Callback = function(v)
+        espEnabled = v
+        if v then
+            ClearESP()
+            -- Existing eggs
             for _, obj in ipairs(workspace:GetDescendants()) do
                 if obj:IsA("Model") and (obj:GetAttribute("EggUUID") or obj:GetAttribute("UUID")) then
-                    CreateEggESP(obj)
+                    createSimplePetEsp(obj)
                 end
             end
-
-            -- Listen for new eggs
-            workspace.DescendantAdded:Connect(function(desc)
-                if espRunning and desc:IsA("Model") and (desc:GetAttribute("EggUUID") or desc:GetAttribute("UUID")) then
-                    task.wait(0.1)
-                    CreateEggESP(desc)
+            -- New eggs
+            workspace.DescendantAdded:Connect(function(child)
+                if espEnabled and child:IsA("Model") and (child:GetAttribute("EggUUID") or child:GetAttribute("UUID")) then
+                    task.wait(0.2)
+                    createSimplePetEsp(child)
                 end
             end)
         else
-            ClearAllESP()
+            ClearESP()
         end
     end
 })
 
-EspSection:AddButton({
+Section:AddButton({
     Title = "Force Refresh ESP",
     Callback = function()
-        if espRunning then
-            ClearAllESP()
+        if espEnabled then
+            ClearESP()
             for _, obj in ipairs(workspace:GetDescendants()) do
                 if obj:IsA("Model") and (obj:GetAttribute("EggUUID") or obj:GetAttribute("UUID")) then
-                    CreateEggESP(obj)
+                    createSimplePetEsp(obj)
                 end
             end
-            Fluent:Notify({Title = "ESP", Content = "Refreshed all eggs!", Duration = 3})
+            Fluent:Notify({Title = "ESP", Content = "Refreshed!", Duration = 3})
         end
     end
+})
+
+Section:AddParagraph({
+    Title = "Note (Jan 2026)",
+    Content = "Due to mid-2025 patch: Highlight always works. Name/weight often shows '?' or incorrect. Full snipe no longer reliable - eggs fixed per server."
 })
 
 Window:SelectTab(1)
